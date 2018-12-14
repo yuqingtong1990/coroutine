@@ -20,13 +20,13 @@
 #define _INT_STACK        (1024 * 1024)
 #define _INT_COROUTINE    (16)
 
-struct coroutine;
+struct coroutine_c;
 
 struct comng {
 	int running;                // 当前纤程管理器中运行的纤程id
 	int nco;                    // 当前纤程集轮询中当前索引
 	int cap;                    // 纤程集容量,
-	struct coroutine ** co;     // 保存的纤程集
+	struct coroutine_c ** co;     // 保存的纤程集
 #ifdef WIN32
 	PVOID main;                 // 纤程管理器中保存的临时纤程对象
 #else
@@ -35,7 +35,7 @@ struct comng {
 #endif
 };
 
-struct coroutine {
+struct coroutine_c {
 #ifdef WIN32
 	PVOID ctx;                    // 操作系统纤程对象               
 #else
@@ -45,14 +45,14 @@ struct coroutine {
 	ptrdiff_t size;
 #endif
 
-	coroutine_fuc func;                    // 纤程执行的函数体
+	co_fuc func;                    // 纤程执行的函数体
 	void * ud;                    // 纤程执行的额外参数
 	costatus_e status;            // 当前纤程运行状态
 	struct comng * comng;         // 当前纤程集管理器
 };
 
-static inline struct coroutine * _co_new(comng_t comng, coroutine_fuc func, void * ud) {
-	struct coroutine * co = malloc(sizeof(struct coroutine));
+static inline struct coroutine_c * _co_new(comng_t comng, co_fuc func, void * ud) {
+	struct coroutine_c * co = malloc(sizeof(struct coroutine_c));
 	assert(co && comng && func);
 	co->func = func;
 	co->ud = ud;
@@ -66,7 +66,7 @@ static inline struct coroutine * _co_new(comng_t comng, coroutine_fuc func, void
 	return co;
 }
 
-static inline void _co_delete(struct coroutine * co) {
+static inline void _co_delete(struct coroutine_c * co) {
 	#ifdef WIN32
 		DeleteFiber(co->ctx);
 	#else
@@ -79,7 +79,7 @@ static inline void _co_delete(struct coroutine * co) {
 static inline VOID WINAPI _comain(LPVOID ptr) {
 	struct comng * comng = ptr;
 	int id = comng->running;
-	struct coroutine * co = comng->co[id];
+	struct coroutine_c * co = comng->co[id];
 	co->func(comng, co->ud);
 	_co_delete(co);
 	comng->co[id] = NULL;
@@ -91,7 +91,7 @@ static inline void _comain(uint32_t low32, uint32_t hig32) {
 	uintptr_t ptr = (uintptr_t)low32 | ((uintptr_t)hig32 << 32);
 	struct comng * comng = (struct comng *)ptr;
 	int id = comng->running;
-	struct coroutine * co = comng->co[id];
+	struct coroutine_c * co = comng->co[id];
 	co->func(comng, co->ud);
 	_co_delete(co);
 	comng->co[id] = NULL;
@@ -99,7 +99,7 @@ static inline void _comain(uint32_t low32, uint32_t hig32) {
 	comng->running = -1;
 }
 
-static void _save_stack(struct coroutine * co, char * top) {
+static void _save_stack(struct coroutine_c * co, char * top) {
 	char dummy = 0;
 	assert(top - &dummy <= _INT_STACK);
 	if (co->cap < top - &dummy) {
@@ -113,26 +113,26 @@ static void _save_stack(struct coroutine * co, char * top) {
 }
 #endif // WIN32
 
-extern comng_t coroutine_start(void)
+extern comng_t co_start(void)
 {
 	struct comng * comng = malloc(sizeof(struct comng));
 	assert(NULL != comng);
 	comng->nco = 0;
 	comng->running = -1;
-	comng->co = calloc(comng->cap = _INT_COROUTINE, sizeof(struct coroutine *));
+	comng->co = calloc(comng->cap = _INT_COROUTINE, sizeof(struct coroutine_c *));
 	assert(NULL != comng->co);
 	
 #ifdef WIN32
-	comng->main = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);// 开启Window协程
+	comng->main = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);// 将当前线程转换为纤程
 #endif	
 	return comng;	
 }
 
-extern void coroutine_close(comng_t comng)
+extern void co_close(comng_t comng)
 {
 	int i;
 	for (i = 0; i < comng->cap; ++i) {
-		struct coroutine * co = comng->co[i];
+		struct coroutine_c * co = comng->co[i];
 		if (co) {
 			_co_delete(co);
 			comng->co[i] = NULL;
@@ -143,9 +143,9 @@ extern void coroutine_close(comng_t comng)
 	free(comng);
 }
 
-extern int coroutine_create(comng_t comng, coroutine_fuc func, void * ud)
+extern int co_create(comng_t comng, co_fuc func, void * ud)
 {
-	struct coroutine * co = _co_new(comng, func, ud);
+	struct coroutine_c * co = _co_new(comng, func, ud);
 	// 下面是普通情况, 可以找见
 	if (comng->nco < comng->cap) {
 		int i;
@@ -162,17 +162,17 @@ extern int coroutine_create(comng_t comng, coroutine_fuc func, void * ud)
 	}
 
 	// 需要重新分配空间, 构造完毕后返回
-	comng->co = realloc(comng->co, sizeof(struct coroutine *) * comng->cap * 2);
+	comng->co = realloc(comng->co, sizeof(struct coroutine_c *) * comng->cap * 2);
 	assert(NULL != comng->co);
-	memset(comng->co + comng->cap, 0, sizeof(struct coroutine *) * comng->cap);
+	memset(comng->co + comng->cap, 0, sizeof(struct coroutine_c *) * comng->cap);
 	comng->cap <<= 1;
 	comng->co[comng->nco] = co;
 	return comng->nco++;
 }
 
-void coroutine_yield(comng_t comng)
+void co_yield(comng_t comng)
 {
-	struct coroutine * co;
+	struct coroutine_c * co;
 	int id = comng->running;
 	assert(id >= 0);
 	co = comng->co[id];
@@ -190,9 +190,9 @@ void coroutine_yield(comng_t comng)
 	#endif
 }
 
-extern void coroutine_resume(comng_t comng, int id)
+extern void co_resume(comng_t comng, int id)
 {
-	struct coroutine * co;
+	struct coroutine_c * co;
 #ifndef WIN32
 	uintptr_t ptr;
 #endif
@@ -239,13 +239,13 @@ extern void coroutine_resume(comng_t comng, int id)
 
 }
 
-extern costatus_e coroutine_status(comng_t comng, int id)
+extern costatus_e co_status(comng_t comng, int id)
 {
 	assert(comng && id >= 0 && id < comng->cap);
 	return comng->co[id] ? comng->co[id]->status : CS_Dead;
 }
 
-extern int coroutine_running(comng_t comng)
+extern int co_running(comng_t comng)
 {
 	return comng->running;
 }
